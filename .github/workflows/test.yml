@@ -1,0 +1,10 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y python3-gi gir1.2-gtk-3.0 gir1.2-ayatanaappindicator3-0.1 xvfb
+      - run: make test
+      - run: PYTHONPATH=.:tests xvfb-run -a /usr/bin/python3 tests/smoke_ui.py

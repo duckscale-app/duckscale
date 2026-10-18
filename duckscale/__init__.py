@@ -1,0 +1,1 @@
+"""Duckscale desktop controller."""
