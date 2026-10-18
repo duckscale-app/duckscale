@@ -77,6 +77,10 @@ Switching accounts uses the target profile's saved connection preferences. It
 may connect immediately if that account was enabled. Enabling or disabling patches
 only the run preference; DNS, routes, and exit-node settings remain intact.
 
+If account-management access is denied, readable connection status remains visible
+and Duckscale shows the exact operator setup command. Failed actions retain the
+last known status. Background refresh does not disable controls.
+
 Controls are serialized and do not claim success until the daemon confirms the
 requested state. Refresh runs every three seconds. Closing the window leaves the
 tray running; **Quit Duckscale** exits the UI without disconnecting Tailscale.
@@ -121,7 +125,7 @@ python3 -m duckscale --socket /path/to/tailscaled.sock
 
 ## Compatibility and release status
 
-Version 0.1.0 is an initial release. Linux Mint/Cinnamon is the primary target;
+Version 0.1.1 is an initial release. Linux Mint/Cinnamon is the primary target;
 other GTK desktops have not been comprehensively tested. Read-only integration
 was checked with Tailscale 1.104.1. Login and connection mutations were verified
 against test doubles, not a real authentication provider. The LocalAPI can evolve,

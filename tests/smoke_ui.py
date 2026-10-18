@@ -4,6 +4,8 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import GLib, Gdk, Gio, Gtk
 from unittest.mock import patch
+from concurrent.futures import Future
+from duckscale.backend import DaemonError
 from duckscale.__main__ import Duckscale
 from test_backend import FakeClient
 
@@ -79,6 +81,28 @@ def check():
             dialog.response(Gtk.ResponseType.OK)
         else:
             assert app.client.saved_settings == {'CorpDNS': False}
+            failed_write = Future()
+            failed_write.set_exception(DaemonError('write rejected'))
+            app.finish(failed_write, True)
+            assert app.status.get_text() == 'Connected'
+            assert app.toggle.get_sensitive()
+            assert app.error.get_text() == 'write rejected'
+            limited = Future()
+            limited.set_result(({'BackendState': 'Running', 'ProfileError': 'operator required'}, {}, []))
+            app.finish(limited, False)
+            assert app.status.get_text() == 'Connected'
+            assert app.toggle.get_sensitive()
+            assert not app.add_button.get_sensitive()
+            restored = Future()
+            restored.set_result(app.client.snapshot())
+            app.finish(restored, False)
+            assert app.error.get_text() == ''
+            assert app.add_button.get_sensitive()
+            app.run_operation(app.client.snapshot)
+            assert app.toggle.get_sensitive(), 'background refresh must not disable controls'
+            app.toggle_connection()
+            assert app.pending_operation is not None, 'user action must queue behind refresh'
+            app.pending_operation = None
             assert not app.login_pending
             assert app.status.get_text() == 'Connected'
             assert app.detail.get_text() == 'Personal'

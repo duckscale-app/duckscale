@@ -1,4 +1,6 @@
 """Bounded HTTP over the existing tailscaled Unix socket."""
+import getpass
+import shlex
 import http.client
 import json
 import socket
@@ -7,6 +9,10 @@ from urllib.parse import quote
 
 
 class DaemonError(RuntimeError):
+    pass
+
+
+class PermissionDenied(DaemonError):
     pass
 
 
@@ -34,7 +40,9 @@ class Client:
             response = connection.getresponse()
             body = response.read()
             if response.status == 403:
-                raise DaemonError('Permission denied. Configure your user as a Tailscale operator; see README.')
+                raise PermissionDenied(
+                    'Tailscale denied access. Run this once in a terminal, then refresh:\n'
+                    + 'sudo tailscale set --operator=' + shlex.quote(getpass.getuser()))
             if not 200 <= response.status < 300:
                 raise DaemonError(f'Tailscale HTTP {response.status}: {body.decode(errors="replace")[:300]}')
             return json.loads(body) if body else None
@@ -44,9 +52,15 @@ class Client:
             connection.close()
 
     def snapshot(self):
-        return (self.request('GET', 'status'),
-                self.request('GET', 'profiles/current'),
-                self.request('GET', 'profiles/') or [])
+        status = self.request('GET', 'status')
+        try:
+            current = self.request('GET', 'profiles/current') or {}
+            profiles = self.request('GET', 'profiles/') or []
+        except PermissionDenied as exc:
+            # Status is independently readable even without operator permission.
+            status = dict(status, ProfileError=str(exc))
+            current, profiles = {}, []
+        return status, current, profiles
 
     def wait(self, predicate, message):
         deadline = time.monotonic() + 12

@@ -160,3 +160,23 @@ class SettingsTests(unittest.TestCase):
             {'ID': 'one'} if endpoint == 'profiles/current' else {'CorpDNS': True})
         with self.assertRaisesRegex(DaemonError, 'did not confirm'):
             client.save_settings('one', {'CorpDNS': False})
+
+class PermissionRecoveryTests(unittest.TestCase):
+    def test_profile_denial_preserves_connection_status(self):
+        from duckscale.backend import PermissionDenied
+        client = Client()
+        def request(method, endpoint, data=None):
+            if endpoint == 'status':
+                return {'BackendState': 'Running'}
+            raise PermissionDenied('operator required')
+        client.request = MagicMock(side_effect=request)
+        status, current, profiles = client.snapshot()
+        self.assertEqual(status['BackendState'], 'Running')
+        self.assertEqual(status['ProfileError'], 'operator required')
+        self.assertEqual((current, profiles), ({}, []))
+
+    def test_status_failure_is_not_hidden_by_fallback(self):
+        client = Client()
+        client.request = MagicMock(side_effect=DaemonError('daemon unavailable'))
+        with self.assertRaisesRegex(DaemonError, 'daemon unavailable'):
+            client.snapshot()

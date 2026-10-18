@@ -21,6 +21,7 @@ class Duckscale(Gtk.Application):
         self.login_url = None
         self.pool = ThreadPoolExecutor(max_workers=1)
         self.busy = False
+        self.pending_operation = None
         self.snapshot = None
         self.indicator = None
         self.connect('activate', self.activate)
@@ -54,6 +55,8 @@ class Duckscale(Gtk.Application):
             image = Gtk.Image.new_from_pixbuf(GdkPixbuf.Pixbuf.new_from_file_at_scale(str(logo), 88, 88, True))
             box.pack_start(image, False, False, 0)
         self.status = Gtk.Label(label='Reading Tailscale…', xalign=0)
+        self.status.set_line_wrap(True)
+        self.status.set_max_width_chars(32)
         self.status.get_style_context().add_class('connection')
         box.pack_start(self.status, False, False, 0)
         self.toggle = Gtk.Button(label='Enable Tailscale')
@@ -144,10 +147,14 @@ class Duckscale(Gtk.Application):
 
     def run_operation(self, operation, label=None, on_success=None):
         if self.busy:
+            if label and self.pending_operation is None:
+                self.pending_operation = (operation, label, on_success)
+                self.controls(False)
             return
         self.busy = True
-        self.controls(False)
-        self.spinner.start()
+        if label:
+            self.controls(False)
+            self.spinner.start()
         if label:
             self.status.set_text(label)
         future = self.pool.submit(operation)
@@ -157,7 +164,7 @@ class Duckscale(Gtk.Application):
         self.busy = False
         self.spinner.stop()
         try:
-            recovering = self.snapshot is None
+            recovering = self.snapshot is None or bool(self.snapshot[0].get('ProfileError'))
             result = future.result()
             if on_success:
                 on_success(result)
@@ -165,17 +172,31 @@ class Duckscale(Gtk.Application):
             self.snapshot = result
             self.render()
             if mutation or recovering:
-                self.error.set_text('')
+                self.error.set_text(self.snapshot[0].get('ProfileError', ''))
         except Exception as exc:
-            self.snapshot = None
-            self.status.set_text('State unavailable — refresh to retry')
+            if mutation and self.snapshot is not None:
+                # A rejected write does not imply loss of daemon/status access.
+                self.render()
+            else:
+                self.snapshot = None
+                self.status.set_text('Tailscale unavailable')
+                self.detail.set_text('Check that tailscaled is running, then refresh.')
+                self.accounts.remove_all()
+                self.toggle.set_label('Enable Tailscale')
+                self.controls(False)
             self.error.set_text(str(exc))
-            self.controls(False)
+        finally:
+            if self.pending_operation is not None:
+                pending, self.pending_operation = self.pending_operation, None
+                GLib.idle_add(self.run_operation, *pending)
         return False
 
     def render(self):
         status, current, profiles = self.snapshot
         state = status.get('BackendState', 'Unknown')
+        profile_error = status.get('ProfileError', '')
+        if profile_error:
+            self.error.set_text(profile_error)
         if self.login_pending and current.get('ID'):
             self.login_pending = False
             self.login_url = None
@@ -183,17 +204,20 @@ class Duckscale(Gtk.Application):
             self.login_box.hide()
         current = next((p for p in profiles if p.get('ID') == current.get('ID')), current)
         user = current.get('UserProfile') or {}
-        account = user.get('LoginName') or current.get('Name') or 'No account signed in'
+        account = user.get('LoginName') or current.get('Name')
+        if not account:
+            local_user = (status.get('User') or {}).get(str((status.get('Self') or {}).get('UserID')), {})
+            account = local_user.get('LoginName') or ('Account access restricted' if profile_error else 'No account signed in')
         self.detail.set_text('Finish signing in in your browser, or cancel to return.' if self.login_pending else account)
         self.status.set_text({'Running': 'Connected', 'Stopped': 'Disabled',
                               'NeedsLogin': 'Sign-in required',
                               'Starting': 'Connecting…'}.get(state, state))
         self.controls(state in ('Running', 'Stopped') and not self.login_pending)
-        self.add_button.set_sensitive(not self.login_pending)
+        self.add_button.set_sensitive(not self.login_pending and not profile_error)
         self.settings_button.set_sensitive(bool(current.get('ID')) and not self.login_pending)
         if self.indicator:
             self.tray_settings.set_sensitive(bool(current.get('ID')) and not self.login_pending)
-        self.accounts.set_sensitive(not self.login_pending)
+        self.accounts.set_sensitive(not self.login_pending and not profile_error)
         self.login_box.set_sensitive(True)
         if self.indicator:
             self.tray_toggle.set_sensitive(state in ('Running', 'Stopped') and not self.login_pending)
@@ -218,12 +242,12 @@ class Duckscale(Gtk.Application):
         if self.indicator:
             self.tray_toggle.set_label(label if state in ('Running', 'Stopped') else state)
             self.account_menu.set_sensitive(bool(profiles) and not self.login_pending)
-            self.tray_add.set_sensitive(not self.login_pending)
+            self.tray_add.set_sensitive(not self.login_pending and not profile_error)
             self.account_menu.set_submenu(submenu)
             submenu.show_all()
 
     def open_settings(self):
-        if self.busy or self.login_pending or self.settings_open:
+        if self.login_pending or self.settings_open:
             return
         self.run_operation(self.client.settings, 'Loading settings…', self.show_settings)
 
@@ -266,9 +290,10 @@ class Duckscale(Gtk.Application):
             self.refresh()
 
     def add_account(self):
-        if self.busy or self.login_pending:
+        if self.login_pending or self.settings_open:
             self.window.present()
             return
+        self.settings_open = True
         dialog = Gtk.MessageDialog(transient_for=self.window, modal=True,
                                    message_type=Gtk.MessageType.QUESTION,
                                    buttons=Gtk.ButtonsType.OK_CANCEL,
@@ -276,6 +301,7 @@ class Duckscale(Gtk.Application):
         dialog.format_secondary_text('Your current connection will pause during sign-in. Cancel sign-in to return to your previous account.')
         response = dialog.run()
         dialog.destroy()
+        self.settings_open = False
         if response == Gtk.ResponseType.OK:
             self.run_operation(self.client.begin_login, 'Preparing sign-in…', self.login_ready)
 
@@ -315,6 +341,8 @@ class Duckscale(Gtk.Application):
         return True
 
     def toggle_connection(self):
+        if self.login_pending or self.settings_open:
+            return
         if self.snapshot:
             enabled = self.snapshot[0].get('BackendState') != 'Running'
             self.run_operation(lambda: self.client.set_enabled(enabled),
@@ -328,7 +356,7 @@ class Duckscale(Gtk.Application):
 
 def main():
     parser = argparse.ArgumentParser(description='Duckscale desktop controller')
-    parser.add_argument('--version', action='version', version='Duckscale 0.1.0')
+    parser.add_argument('--version', action='version', version='Duckscale 0.1.1')
     parser.add_argument('--background', action='store_true', help='Start in the tray')
     parser.add_argument('--socket', default='/var/run/tailscale/tailscaled.sock')
     args = parser.parse_args()
