@@ -2,7 +2,7 @@
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import GLib, Gdk, Gio
+from gi.repository import GLib, Gdk, Gio, Gtk
 from unittest.mock import patch
 from duckscale.__main__ import Duckscale
 from test_backend import FakeClient
@@ -12,6 +12,14 @@ class DemoClient(FakeClient):
     def snapshot(self):
         profiles = [{'ID': 'one', 'Name': 'Personal'}, {'ID': 'two', 'Name': 'Work'}]
         return {'BackendState': self.state}, {'ID': self.profile}, profiles
+
+    def settings(self):
+        return self.profile, {'CorpDNS': True, 'RouteAll': False, 'ShieldsUp': True}
+
+    def save_settings(self, profile_id, changes):
+        assert profile_id == self.profile
+        self.saved_settings = changes
+        return self.snapshot()
 
     def begin_login(self):
         previous = self.profile
@@ -59,7 +67,18 @@ def check():
             app.client.profile = 'one'
             app.client.state = 'Running'
             app.refresh()
+        elif step == 7:
+            app.open_settings()
+        elif step == 8:
+            assert app.settings_open
+            dialog = next(w for w in Gtk.Window.list_toplevels() if w.get_title() == 'Connection settings')
+            checks = [w for w in dialog.get_content_area().get_children() if isinstance(w, Gtk.CheckButton)]
+            assert checks[0].get_active()
+            assert not checks[2].get_active()
+            checks[0].set_active(False)
+            dialog.response(Gtk.ResponseType.OK)
         else:
+            assert app.client.saved_settings == {'CorpDNS': False}
             assert not app.login_pending
             assert app.status.get_text() == 'Connected'
             assert app.detail.get_text() == 'Personal'
@@ -89,5 +108,5 @@ with patch('duckscale.__main__.Gio.AppInfo.launch_default_for_uri', return_value
 app.pool.shutdown()
 if failed:
     raise failed[0]
-assert step == 7
-print('GTK smoke passed: toggle, switch, add-account browser handoff, cancel/restore, login completion')
+assert step == 9
+print('GTK smoke passed: toggle, switch, add-account browser handoff, cancel/restore, login completion, settings save')

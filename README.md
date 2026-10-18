@@ -17,6 +17,7 @@ The official `tailscaled` service handles networking and credentials.
 - Add an account through Tailscale's browser sign-in flow.
 - Cancel sign-in and return to the previous saved account.
 - Automatic refresh and recovery after daemon interruptions.
+- Per-account DNS, subnet routes, incoming connections, and exit-node LAN settings.
 - Application-menu launcher and optional start-at-login installation.
 
 ## Quick start
@@ -81,6 +82,21 @@ requested state. Refresh runs every three seconds. Closing the window leaves the
 tray running; **Quit Duckscale** exits the UI without disconnecting Tailscale.
 Without AppIndicator, the window remains usable. GNOME may need an AppIndicator
 extension to display the tray.
+
+## Connection settings
+
+Open the gear button in the window, or **Settings…** in the tray. You can change:
+
+- **Use Tailscale DNS:** accept this tailnet’s DNS configuration.
+- **Accept subnet routes:** use networks advertised by subnet routers.
+- **Allow incoming connections:** permit connections subject to tailnet access
+  policy and your local firewall; disabling this enables Tailscale shields-up.
+- **Allow local network with an exit node:** retain direct LAN access when an
+  exit node is in use. This does not select or enable an exit node.
+
+Only changed settings are saved, and the daemon’s stored values are checked
+before reporting success. Settings belong to the active account. If the account
+changes before saving, Duckscale rejects the save and asks you to reopen settings.
 
 ## Development
 

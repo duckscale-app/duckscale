@@ -15,6 +15,7 @@ class Duckscale(Gtk.Application):
         super().__init__(application_id='app.duckscale.Duckscale')
         self.client = client
         self.start_hidden = start_hidden
+        self.settings_open = False
         self.login_pending = False
         self.previous_profile = None
         self.login_url = None
@@ -34,6 +35,10 @@ class Duckscale(Gtk.Application):
         header = Gtk.HeaderBar(title='Duckscale', subtitle='Your tailnets, within reach')
         header.set_show_close_button(True)
         self.window.set_titlebar(header)
+        self.settings_button = Gtk.Button.new_from_icon_name('preferences-system-symbolic', Gtk.IconSize.BUTTON)
+        self.settings_button.set_tooltip_text('Connection settings')
+        self.settings_button.connect('clicked', lambda *_: self.open_settings())
+        header.pack_start(self.settings_button)
         self.spinner = Gtk.Spinner()
         header.pack_end(self.spinner)
         css = Gtk.CssProvider()
@@ -110,6 +115,9 @@ class Duckscale(Gtk.Application):
         self.tray_add = Gtk.MenuItem(label='Add account…')
         self.tray_add.connect('activate', lambda *_: self.add_account())
         menu.append(self.tray_add)
+        self.tray_settings = Gtk.MenuItem(label='Settings…')
+        self.tray_settings.connect('activate', lambda *_: self.open_settings())
+        menu.append(self.tray_settings)
         show = Gtk.MenuItem(label='Open Duckscale')
         show.connect('activate', lambda *_: self.window.present())
         menu.append(show)
@@ -126,12 +134,13 @@ class Duckscale(Gtk.Application):
         return False
 
     def controls(self, sensitive):
-        for widget in (self.toggle, self.accounts, self.switch_button, self.add_button, self.login_box):
+        for widget in (self.toggle, self.accounts, self.switch_button, self.add_button, self.login_box, self.settings_button):
             widget.set_sensitive(sensitive)
         if self.indicator:
             self.tray_toggle.set_sensitive(sensitive)
             self.account_menu.set_sensitive(sensitive)
             self.tray_add.set_sensitive(sensitive)
+            self.tray_settings.set_sensitive(sensitive)
 
     def run_operation(self, operation, label=None, on_success=None):
         if self.busy:
@@ -181,6 +190,9 @@ class Duckscale(Gtk.Application):
                               'Starting': 'Connecting…'}.get(state, state))
         self.controls(state in ('Running', 'Stopped') and not self.login_pending)
         self.add_button.set_sensitive(not self.login_pending)
+        self.settings_button.set_sensitive(bool(current.get('ID')) and not self.login_pending)
+        if self.indicator:
+            self.tray_settings.set_sensitive(bool(current.get('ID')) and not self.login_pending)
         self.accounts.set_sensitive(not self.login_pending)
         self.login_box.set_sensitive(True)
         if self.indicator:
@@ -209,6 +221,49 @@ class Duckscale(Gtk.Application):
             self.tray_add.set_sensitive(not self.login_pending)
             self.account_menu.set_submenu(submenu)
             submenu.show_all()
+
+    def open_settings(self):
+        if self.busy or self.login_pending or self.settings_open:
+            return
+        self.run_operation(self.client.settings, 'Loading settings…', self.show_settings)
+
+    def show_settings(self, result):
+        profile_id, prefs = result
+        self.settings_open = True
+        dialog = Gtk.Dialog(title='Connection settings', transient_for=self.window,
+                            modal=True, destroy_with_parent=True)
+        dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+        dialog.add_button('Save changes', Gtk.ResponseType.OK)
+        content = dialog.get_content_area()
+        content.set_border_width(20)
+        content.set_spacing(14)
+        controls = {}
+        options = (
+            ('CorpDNS', 'Use Tailscale DNS', 'Use the DNS configuration provided by this tailnet.', False),
+            ('RouteAll', 'Accept subnet routes', 'Reach networks advertised by your tailnet’s subnet routers.', False),
+            ('ShieldsUp', 'Allow incoming connections', 'Allow tailnet connections permitted by your access policy and local firewall.', True),
+            ('ExitNodeAllowLANAccess', 'Allow local network with an exit node', 'Keep direct access to your LAN while using an exit node.', False),
+        )
+        for key, title, description, inverse in options:
+            check = Gtk.CheckButton(label=title)
+            check.set_active(not prefs.get(key, False) if inverse else prefs.get(key, False))
+            content.pack_start(check, False, False, 0)
+            hint = Gtk.Label(label=description, xalign=0, wrap=True)
+            hint.set_max_width_chars(48)
+            hint.get_style_context().add_class('hint')
+            content.pack_start(hint, False, False, 0)
+            controls[key] = (check, inverse)
+        dialog.show_all()
+        response = dialog.run()
+        changes = {key: (not check.get_active() if inverse else check.get_active())
+                   for key, (check, inverse) in controls.items()}
+        changes = {key: value for key, value in changes.items() if value != prefs.get(key, False)}
+        dialog.destroy()
+        self.settings_open = False
+        if response == Gtk.ResponseType.OK and changes:
+            self.run_operation(lambda: self.client.save_settings(profile_id, changes), 'Saving settings…')
+        else:
+            self.refresh()
 
     def add_account(self):
         if self.busy or self.login_pending:
@@ -254,6 +309,8 @@ class Duckscale(Gtk.Application):
                            'Returning to previous account…', restored)
 
     def refresh(self):
+        if self.settings_open:
+            return True
         self.run_operation(self.client.snapshot)
         return True
 

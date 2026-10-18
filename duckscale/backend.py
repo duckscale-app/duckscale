@@ -98,3 +98,25 @@ class Client:
             return self.switch(previous)
         self.request('PUT', 'profiles/')
         return self.snapshot()
+
+    def settings(self):
+        current = self.request('GET', 'profiles/current')
+        prefs = self.request('GET', 'prefs')
+        if self.request('GET', 'profiles/current').get('ID') != current.get('ID'):
+            raise DaemonError('Account changed while loading settings. Open settings again.')
+        return current.get('ID'), prefs
+
+    def save_settings(self, profile_id, changes):
+        allowed = {'CorpDNS', 'RouteAll', 'ShieldsUp', 'ExitNodeAllowLANAccess'}
+        if not profile_id or self.request('GET', 'profiles/current').get('ID') != profile_id:
+            raise DaemonError('Account changed. Open settings again before saving.')
+        if any(key not in allowed or type(value) is not bool for key, value in changes.items()):
+            raise DaemonError('Unsupported settings change.')
+        if changes:
+            patch = dict(changes)
+            patch.update({key + 'Set': True for key in changes})
+            self.request('PATCH', 'prefs', patch)
+            confirmed = self.request('GET', 'prefs')
+            if any(confirmed.get(key) != value for key, value in changes.items()):
+                raise DaemonError('Tailscale did not confirm the new settings. Reopen settings to check.')
+        return self.snapshot()

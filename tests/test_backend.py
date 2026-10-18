@@ -117,3 +117,46 @@ class LoginTests(unittest.TestCase):
         client = self.client({})
         client.cancel_login('old')
         client.switch.assert_called_once_with('old')
+
+class SettingsTests(unittest.TestCase):
+    def client(self):
+        client = Client()
+        self.prefs = {'CorpDNS': True, 'RouteAll': False, 'WantRunning': True,
+                      'ExitNodeID': 'keep-me'}
+        def request(method, endpoint, data=None):
+            if endpoint == 'profiles/current':
+                return {'ID': 'one'}
+            if endpoint == 'prefs':
+                if method == 'PATCH':
+                    self.prefs.update({k: v for k, v in data.items() if not k.endswith('Set')})
+                return dict(self.prefs)
+        client.request = MagicMock(side_effect=request)
+        client.snapshot = MagicMock(return_value=({}, {'ID': 'one'}, []))
+        return client
+
+    def test_saves_only_selected_settings_with_masks(self):
+        client = self.client()
+        client.save_settings('one', {'CorpDNS': False, 'ShieldsUp': True})
+        patch_call = [c for c in client.request.call_args_list if c.args[0] == 'PATCH'][0]
+        self.assertEqual(patch_call.args[2], {'CorpDNS': False, 'ShieldsUp': True,
+                                            'CorpDNSSet': True, 'ShieldsUpSet': True})
+        self.assertTrue(self.prefs['WantRunning'])
+        self.assertEqual(self.prefs['ExitNodeID'], 'keep-me')
+
+    def test_account_changed_rejects_save(self):
+        client = self.client()
+        with self.assertRaisesRegex(DaemonError, 'Account changed'):
+            client.save_settings('other', {'CorpDNS': False})
+        self.assertFalse(any(c.args[0] == 'PATCH' for c in client.request.call_args_list))
+
+    def test_unknown_setting_rejected(self):
+        client = self.client()
+        with self.assertRaisesRegex(DaemonError, 'Unsupported'):
+            client.save_settings('one', {'WantRunning': False})
+
+    def test_unconfirmed_preference_is_error(self):
+        client = self.client()
+        client.request.side_effect = lambda method, endpoint, data=None: (
+            {'ID': 'one'} if endpoint == 'profiles/current' else {'CorpDNS': True})
+        with self.assertRaisesRegex(DaemonError, 'did not confirm'):
+            client.save_settings('one', {'CorpDNS': False})
