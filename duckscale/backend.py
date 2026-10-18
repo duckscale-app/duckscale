@@ -4,6 +4,7 @@ import shlex
 import http.client
 import json
 import socket
+import subprocess
 import time
 from urllib.parse import quote
 
@@ -51,6 +52,28 @@ class Client:
         finally:
             connection.close()
 
+    def _grant_operator(self):
+        # Only called by explicit user actions, never by background refresh.
+        command = ['/usr/bin/pkexec', '/usr/bin/tailscale', '--socket=' + self.path,
+                   'set', '--operator=' + getpass.getuser()]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise DaemonError('Could not authorize Tailscale controls. Use the operator command in a terminal.') from exc
+        if result.returncode:
+            raise DaemonError('Administrator authorization was cancelled or denied. No permission was granted.')
+
+    def authorize_operator(self):
+        self._grant_operator()
+        return self.snapshot()
+
+    def _ensure_operator(self):
+        try:
+            self.request('GET', 'profiles/current')
+        except PermissionDenied:
+            self._grant_operator()
+            self.request('GET', 'profiles/current')
+
     def snapshot(self):
         status = self.request('GET', 'status')
         try:
@@ -81,6 +104,7 @@ class Client:
         if not profile_id:
             raise DaemonError('No account selected.')
         self.request('POST', 'profiles/' + quote(profile_id, safe=''))
+        self._ensure_operator()
         return self.wait(lambda s: s[1].get('ID') == profile_id,
                          'Tailscale did not confirm the selected account.')
 
@@ -89,6 +113,8 @@ class Client:
         previous = self.request('GET', 'profiles/current').get('ID')
         self.request('PUT', 'profiles/')
         try:
+            self._ensure_operator()
+            self.request('POST', 'start', {})
             self.request('POST', 'login-interactive')
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
@@ -102,9 +128,12 @@ class Client:
                     return previous, url
                 time.sleep(.25)
             raise DaemonError('No sign-in link received. Check your internet connection and retry.')
-        except Exception:
+        except Exception as original:
             if previous:
-                self.switch(previous)
+                try:
+                    self.switch(previous)
+                except DaemonError:
+                    raise DaemonError(str(original) + '\nTo return to your saved account, run: sudo tailscale switch ' + shlex.quote(previous)) from original
             raise
 
     def cancel_login(self, previous):

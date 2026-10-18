@@ -43,7 +43,18 @@ sudo tailscale set --operator="$USER"
 ```
 
 This grants your user Tailscale administration access. Duckscale runs without
-root and never changes socket permissions or invokes sudo.
+root and never changes socket permissions or invokes sudo. **Authorize Tailscale
+controls…** offers the same setup using your desktop's administrator prompt
+(`pkexec`). Only the system Tailscale CLI is elevated; the GUI remains unprivileged.
+
+Operator authorization is per Tailscale profile. Adding or switching accounts can
+therefore require another administrator prompt. Duckscale checks access after
+profile transitions and requests authorization only when necessary. Cancelling
+authorization leaves controls restricted; the app shows how to return to the
+previous account if automatic restoration is denied. Background refresh never
+opens administrator prompts. Install `policykit-1`/`pkexec` and a working desktop
+Polkit authentication agent to use the graphical prompt, or use the terminal
+command above.
 
 ## Install for your user
 

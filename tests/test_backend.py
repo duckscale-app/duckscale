@@ -32,7 +32,7 @@ class ClientTests(unittest.TestCase):
     def test_switch_confirms_account_without_overwriting_preferences(self):
         client = FakeClient()
         self.assertEqual(client.switch('two')[1]['ID'], 'two')
-        self.assertEqual(client.calls, [('POST', 'profiles/two', None)])
+        self.assertEqual(client.calls, [('POST', 'profiles/two', None), ('GET', 'profiles/current', None)])
 
     def test_unconfirmed_toggle_times_out(self):
         client = FakeClient()
@@ -96,7 +96,7 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(client.begin_login(), ('old', 'https://login.tailscale.com/a/test'))
         calls = [(c.args[0], c.args[1]) for c in client.request.call_args_list]
         self.assertEqual(calls, [('GET', 'profiles/current'), ('PUT', 'profiles/'),
-                                 ('POST', 'login-interactive'), ('GET', 'status')])
+                                 ('GET', 'profiles/current'), ('POST', 'start'), ('POST', 'login-interactive'), ('GET', 'status')])
         client.switch.assert_not_called()
 
     def test_unsafe_auth_url_restores_old_profile(self):
@@ -180,3 +180,34 @@ class PermissionRecoveryTests(unittest.TestCase):
         client.request = MagicMock(side_effect=DaemonError('daemon unavailable'))
         with self.assertRaisesRegex(DaemonError, 'daemon unavailable'):
             client.snapshot()
+
+
+class ProfileOperatorTests(unittest.TestCase):
+    def test_profile_transition_reauthorizes_only_after_permission_denial(self):
+        from duckscale.backend import PermissionDenied
+        client = Client()
+        client.request = MagicMock(side_effect=[PermissionDenied('denied'), {'ID': ''}])
+        client._grant_operator = MagicMock()
+        client._ensure_operator()
+        client._grant_operator.assert_called_once()
+
+    def test_existing_permission_does_not_prompt(self):
+        client = Client()
+        client.request = MagicMock(return_value={'ID': 'one'})
+        client._grant_operator = MagicMock()
+        client._ensure_operator()
+        client._grant_operator.assert_not_called()
+
+    def test_cancelled_authorization_reports_error(self):
+        client = Client()
+        with patch('duckscale.backend.subprocess.run', return_value=MagicMock(returncode=126)):
+            with self.assertRaisesRegex(DaemonError, 'cancelled or denied'):
+                client._grant_operator()
+
+    def test_authorization_uses_fixed_binary_and_no_shell(self):
+        client = Client()
+        with patch('duckscale.backend.subprocess.run', return_value=MagicMock(returncode=0)) as run:
+            client._grant_operator()
+        args, kwargs = run.call_args
+        self.assertEqual(args[0][:2], ['/usr/bin/pkexec', '/usr/bin/tailscale'])
+        self.assertNotIn('shell', kwargs)

@@ -93,11 +93,14 @@ def check():
             assert app.status.get_text() == 'Connected'
             assert app.toggle.get_sensitive()
             assert not app.add_button.get_sensitive()
+            assert app.authorize_button.get_visible()
+            assert app.authorize_button.get_sensitive()
             restored = Future()
             restored.set_result(app.client.snapshot())
             app.finish(restored, False)
             assert app.error.get_text() == ''
             assert app.add_button.get_sensitive()
+            assert not app.authorize_button.get_visible()
             app.run_operation(app.client.snapshot)
             assert app.toggle.get_sensitive(), 'background refresh must not disable controls'
             app.toggle_connection()

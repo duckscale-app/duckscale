@@ -88,12 +88,17 @@ class Duckscale(Gtk.Application):
         self.error = Gtk.Label(xalign=0, selectable=True, wrap=True)
         self.error.set_max_width_chars(52)
         box.pack_start(self.error, False, False, 0)
+        self.authorize_button = Gtk.Button(label='Authorize Tailscale controls…')
+        self.authorize_button.connect('clicked', lambda *_: self.run_operation(
+            self.client.authorize_operator, 'Waiting for administrator authorization…'))
+        box.pack_start(self.authorize_button, False, False, 0)
         refresh = Gtk.Button(label='Refresh')
         refresh.connect('clicked', lambda *_: self.refresh())
         box.pack_start(refresh, False, False, 0)
         self.tray()
         self.window.show_all()
         self.login_box.hide()
+        self.authorize_button.hide()
         if self.start_hidden and self.indicator:
             self.window.hide()
         self.refresh()
@@ -137,7 +142,7 @@ class Duckscale(Gtk.Application):
         return False
 
     def controls(self, sensitive):
-        for widget in (self.toggle, self.accounts, self.switch_button, self.add_button, self.login_box, self.settings_button):
+        for widget in (self.toggle, self.accounts, self.switch_button, self.add_button, self.login_box, self.settings_button, self.authorize_button):
             widget.set_sensitive(sensitive)
         if self.indicator:
             self.tray_toggle.set_sensitive(sensitive)
@@ -195,6 +200,8 @@ class Duckscale(Gtk.Application):
         status, current, profiles = self.snapshot
         state = status.get('BackendState', 'Unknown')
         profile_error = status.get('ProfileError', '')
+        self.authorize_button.set_visible(bool(profile_error))
+        self.authorize_button.set_sensitive(True)
         if profile_error:
             self.error.set_text(profile_error)
         if self.login_pending and current.get('ID'):
@@ -298,7 +305,7 @@ class Duckscale(Gtk.Application):
                                    message_type=Gtk.MessageType.QUESTION,
                                    buttons=Gtk.ButtonsType.OK_CANCEL,
                                    text='Sign in to another account?')
-        dialog.format_secondary_text('Your current connection will pause during sign-in. Cancel sign-in to return to your previous account.')
+        dialog.format_secondary_text('Your connection will pause during sign-in. Linux may ask you to authorize Tailscale controls for the new profile. Cancel sign-in to return to the previous account.')
         response = dialog.run()
         dialog.destroy()
         self.settings_open = False
