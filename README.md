@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Duckscale logo" width="220">
+</p>
+
 # Duckscale
 
 A Linux desktop app for reliable Tailscale connection control and account switching.
